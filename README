@@ -1,0 +1,13 @@
+# xkcd903
+
+The goal of this software is to prove that Xkcd 903's alt text isn't true.
+
+## Usage
+
+    $ cake repl
+    user=> (require 'xkcd903.core)
+    user=> (xkcd903.core/analyse-page xkcd903.core/*random-page*)
+
+## License
+
+Copyright (C) 2011 Jan Stępień
