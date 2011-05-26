@@ -1,23 +1,21 @@
 (ns xkcd903.core
-  (:require [clojure.xml :as xml]
-            [clojure-http.resourcefully :as res]
-            [clojure.contrib.str-utils2 :as str2])
+  (:require [clojure-http.resourcefully :as res])
   (:import (org.htmlcleaner HtmlCleaner)))
 
-(def *random-page* (str "http://en.wikipedia.org/wiki/Special:Random"))
+(def *random-page* "http://en.wikipedia.org/wiki/Special:Random")
+
+(def *cdn-domain* "en.wikipedia.org.nyud.net")
 
 (defn full-url
   "Use a CDN. We don't want to kill Wikipedia."
   [name]
-  (str "http://en.wikipedia.org.nyud.net" name))
+  (str "http://" *cdn-domain* name))
 
 (defn log
-  [msg & rest]
-  (println (.format (java.text.DateFormat/getDateTimeInstance)
-                    (java.util.Date.))
-           "-" (str2/join " " (cons msg rest))))
-
-(def philosophy? (partial = "/wiki/Philosophy"))
+  [msg]
+  (let [date-str (.format (java.text.DateFormat/getDateTimeInstance)
+                          (java.util.Date.))]
+    (println date-str "-" msg)))
 
 (defn xpath
   [node query]
@@ -52,23 +50,52 @@
   [paragraph]
   (let [link-index  (.indexOf paragraph "<a")
         lparen-index (.indexOf paragraph "(")
-        rparen-index (.indexOf paragraph ")")]
+        rparen-index (.indexOf paragraph ")")
+        link-is-not-in-parens (or (= -1 rparen-index)
+                                  (< link-index lparen-index))
+        link (second (re-find #"<a href=\"(/wiki/.*?)\"" paragraph))
+        link-is-valid (and link-is-not-in-parens
+                           (not (or (re-find #"^/wiki/Wikipedia:" link)
+                                    (re-find #"^/wiki/File:" link))))]
     (cond
       (= -1 link-index) nil
-      (or (= -1 rparen-index)
-          (< link-index lparen-index))
-      (second (re-find #"<a href=\"(/wiki/.*?)\"" paragraph))
+      link-is-valid link
       true (recur (apply str (drop (inc rparen-index) paragraph))))))
 
-(defn analyse-page
+(def leading-to-philosophy (atom #{(full-url "/wiki/Philosophy")}))
+
+(defn leads-to-philosophy?
   [addr]
-  (let [body-str (get-body addr)
-        [title paragraphs] (parse-page body-str)]
-    (loop [head (first paragraphs) tail (rest paragraphs)]
-      (if-let [url (valid-link head)]
-        (do
-          (log url)
-          (if (philosophy? url)
-            (log "We've lost again")
-            (analyse-page (full-url url)))))
-      (recur (first tail) (rest tail)))))
+  (contains? @leading-to-philosophy addr))
+
+(defn mark-as-leading-to-philosophy
+  [addr]
+  (when (not (= addr (full-url *random-page*)))
+    (swap! leading-to-philosophy #(conj % addr))))
+
+(defn analyse-page
+  ([addr history]
+   (if (contains? history addr)
+     (do
+       (log "Great success! We've found a loop:")
+       (map #(log (str "  " %)) history)
+       true)
+     (let [body-str (get-body addr)
+           [title paragraphs] (parse-page body-str)]
+       (loop [head (first paragraphs) tail (rest paragraphs)]
+         (if-let [url (full-url (valid-link head))]
+           (do
+             (log url)
+             (if (leads-to-philosophy? url)
+               (do
+                 (log "We've lost again")
+                 (when (not (empty? history))
+                   (map mark-as-leading-to-philosophy history))
+                 false)
+               (analyse-page url (conj history addr))))
+           (recur (first tail) (rest tail)))))))
+  ([addr] (analyse-page addr #{})))
+
+(defn start!
+  []
+  (analyse-page *random-page*))
